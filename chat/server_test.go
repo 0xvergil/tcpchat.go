@@ -107,15 +107,6 @@ func TestJoinLeaveNotices(t *testing.T) {
 	c.expect("bob has left our chat...")
 }
 
-func TestMaxConnections(t *testing.T) {
-	addr := startServer(t)
-	for i := 0; i < maxClients; i++ {
-		join(t, addr, string(rune('a'+i)))
-	}
-	c := dial(t, addr)
-	c.expect("Chat is full")
-}
-
 func TestBroadcast(t *testing.T) {
 	addr := startServer(t)
 	a := join(t, addr, "alice")
@@ -148,4 +139,45 @@ func TestPromptFormat(t *testing.T) {
 	if _, err := time.Parse(timeLayout, ts); err != nil {
 		t.Fatalf("bad prompt %q: %v", p, err)
 	}
+}
+
+func TestHistoryReplay(t *testing.T) {
+	addr := startServer(t)
+	a := join(t, addr, "alice")
+	a.say("first")
+	a.say("second")
+	a.expect("[alice]:")
+
+	b := dial(t, addr)
+	b.expect("[ENTER YOUR NAME]: ")
+	b.say("bob")
+	b.expect("[alice]:first")
+	b.expect("[alice]:second")
+}
+
+func TestLeaveKeepsOthersConnected(t *testing.T) {
+	addr := startServer(t)
+	a := join(t, addr, "alice")
+	b := join(t, addr, "bob")
+	c := join(t, addr, "carol")
+	d := join(t, addr, "dave")
+	a.expect("dave has joined our chat...")
+
+	d.conn.Close()
+	a.expect("dave has left our chat...")
+	b.expect("dave has left our chat...")
+	c.expect("dave has left our chat...")
+
+	a.say("still here")
+	b.expect("[alice]:still here")
+	c.expect("[alice]:still here")
+}
+
+func TestMaxConnections(t *testing.T) {
+	addr := startServer(t)
+	for i := 0; i < maxClients; i++ {
+		join(t, addr, string(rune('a'+i)))
+	}
+	c := dial(t, addr)
+	c.expect("Chat is full")
 }
