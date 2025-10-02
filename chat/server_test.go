@@ -51,6 +51,14 @@ func (c *tc) expect(substr string) {
 
 func (c *tc) say(s string) { c.conn.Write([]byte(s + "\n")) }
 
+func join(t *testing.T, addr, name string) *tc {
+	c := dial(t, addr)
+	c.expect("[ENTER YOUR NAME]: ")
+	c.say(name)
+	c.expect("[")
+	return c
+}
+
 func TestLogoAndName(t *testing.T) {
 	c := dial(t, startServer(t))
 	c.expect("Welcome to TCP-Chat!")
@@ -73,4 +81,37 @@ func TestInvalidNames(t *testing.T) {
 	c.say("a\x01b")
 	c.expect("Name contains invalid characters.")
 	c.expect("[ENTER YOUR NAME]: ")
+}
+
+func TestDuplicateName(t *testing.T) {
+	addr := startServer(t)
+	join(t, addr, "a")
+	c := dial(t, addr)
+	c.expect("[ENTER YOUR NAME]: ")
+	c.say("a")
+	c.expect("Name already taken.")
+}
+
+func TestJoinLeaveNotices(t *testing.T) {
+	addr := startServer(t)
+	a := join(t, addr, "alice")
+	b := join(t, addr, "bob")
+	a.expect("bob has joined our chat...")
+
+	c := join(t, addr, "carol")
+	a.expect("carol has joined our chat...")
+	b.expect("carol has joined our chat...")
+
+	b.conn.Close()
+	a.expect("bob has left our chat...")
+	c.expect("bob has left our chat...")
+}
+
+func TestMaxConnections(t *testing.T) {
+	addr := startServer(t)
+	for i := 0; i < maxClients; i++ {
+		join(t, addr, string(rune('a'+i)))
+	}
+	c := dial(t, addr)
+	c.expect("Chat is full")
 }

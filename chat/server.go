@@ -8,14 +8,17 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
+	maxClients   = 10
 	maxLine      = 4096
 	maxNameLen   = 32
 	outBuffer    = 128
 	writeTimeout = 10 * time.Second
+	timeLayout   = "2006-01-02 15:04:05"
 	namePrompt   = "[ENTER YOUR NAME]: "
 )
 
@@ -69,10 +72,15 @@ func (c *client) writeLoop() {
 	}
 }
 
-type Server struct{}
+type Server struct {
+	mu      sync.Mutex
+	clients map[*client]struct{} // clients that completed the name step
+	active  int                  // every open connection, named or not
+	history []string
+}
 
 func NewServer() *Server {
-	return &Server{}
+	return &Server{clients: make(map[*client]struct{})}
 }
 
 func (s *Server) Serve(ln net.Listener) error {
@@ -86,17 +94,41 @@ func (s *Server) Serve(ln net.Listener) error {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
+		if !s.reserve() {
+			conn.SetWriteDeadline(time.Now().Add(time.Second))
+			io.WriteString(conn, "Chat is full (max 10 connections). Try again later.\n")
+			conn.Close()
+			continue
+		}
 		go s.handle(conn)
 	}
+}
+
+func (s *Server) reserve() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active >= maxClients {
+		return false
+	}
+	s.active++
+	return true
+}
+
+func (s *Server) release() {
+	s.mu.Lock()
+	s.active--
+	s.mu.Unlock()
 }
 
 func (s *Server) handle(conn net.Conn) {
 	c := &client{conn: conn, out: make(chan string, outBuffer), wdone: make(chan struct{})}
 	go c.writeLoop()
 	defer func() {
+		s.leave(c)
 		close(c.out)
 		<-c.wdone
 		conn.Close()
+		s.release()
 	}()
 
 	for _, l := range logo {
@@ -111,12 +143,10 @@ func (s *Server) handle(conn net.Conn) {
 		if !sc.Scan() {
 			return
 		}
-		name := strings.TrimSpace(sc.Text())
-		if err := validName(name); err != nil {
+		if err := s.join(c, strings.TrimSpace(sc.Text())); err != nil {
 			c.send(err.Error() + "\n")
 			continue
 		}
-		c.name = name
 		registered = true
 	}
 
@@ -126,6 +156,10 @@ func (s *Server) handle(conn net.Conn) {
 	if err := sc.Err(); err != nil && !errors.Is(err, net.ErrClosed) {
 		log.Printf("read %s: %v", c.name, err)
 	}
+}
+
+func prompt(name string) string {
+	return fmt.Sprintf("[%s][%s]:", time.Now().Format(timeLayout), name)
 }
 
 func validName(name string) error {
@@ -138,4 +172,43 @@ func validName(name string) error {
 		return errors.New("Name contains invalid characters.")
 	}
 	return nil
+}
+
+func (s *Server) join(c *client, name string) error {
+	if err := validName(name); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for o := range s.clients {
+		if o.name == name {
+			return errors.New("Name already taken.")
+		}
+	}
+	c.name = name
+	for _, h := range s.history {
+		c.send(h + "\n")
+	}
+	s.clients[c] = struct{}{}
+	s.announce(c, name+" has joined our chat...")
+	c.send(prompt(name))
+	return nil
+}
+
+func (s *Server) leave(c *client) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.clients[c]; !ok {
+		return
+	}
+	delete(s.clients, c)
+	s.announce(c, c.name+" has left our chat...")
+}
+
+func (s *Server) announce(skip *client, text string) {
+	for o := range s.clients {
+		if o != skip {
+			o.send("\n" + text + "\n" + prompt(o.name))
+		}
+	}
 }
