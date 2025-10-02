@@ -150,9 +150,10 @@ func (s *Server) handle(conn net.Conn) {
 		registered = true
 	}
 
-	// Messages are handled starting from the next commit; discard for now.
 	for sc.Scan() {
+		s.message(c, sc.Text())
 	}
+
 	if err := sc.Err(); err != nil && !errors.Is(err, net.ErrClosed) {
 		log.Printf("read %s: %v", c.name, err)
 	}
@@ -209,6 +210,32 @@ func (s *Server) announce(skip *client, text string) {
 	for o := range s.clients {
 		if o != skip {
 			o.send("\n" + text + "\n" + prompt(o.name))
+		}
+	}
+}
+
+func (s *Server) message(c *client, text string) {
+	text = strings.Map(func(r rune) rune {
+		if r < 32 && r != '\t' || r == 127 {
+			return -1
+		}
+		return r
+	}, text)
+	if strings.TrimSpace(text) == "" {
+		c.send(prompt(c.name)) // empty messages are never broadcast
+		return
+	}
+
+	line := fmt.Sprintf("[%s][%s]:%s", time.Now().Format(timeLayout), c.name, text)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.history = append(s.history, line)
+	for o := range s.clients {
+		if o == c {
+			o.send(prompt(o.name))
+		} else {
+			o.send("\n" + line + "\n" + prompt(o.name))
 		}
 	}
 }

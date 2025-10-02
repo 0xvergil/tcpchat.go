@@ -115,3 +115,37 @@ func TestMaxConnections(t *testing.T) {
 	c := dial(t, addr)
 	c.expect("Chat is full")
 }
+
+func TestBroadcast(t *testing.T) {
+	addr := startServer(t)
+	a := join(t, addr, "alice")
+	b := join(t, addr, "bob")
+	c := join(t, addr, "carol")
+
+	b.say("hello")
+	a.expect("[bob]:hello")
+	c.expect("[bob]:hello")
+}
+
+func TestEmptyMessageNotBroadcast(t *testing.T) {
+	addr := startServer(t)
+	a := join(t, addr, "alice")
+	b := join(t, addr, "bob")
+	a.expect("bob has joined our chat...")
+
+	b.say("")
+	b.say("   ")
+	b.say("real")
+	a.expect("[bob]:real")
+	if strings.Contains(a.buf, "[bob]:\n") {
+		t.Fatal("empty message was broadcast")
+	}
+}
+
+func TestPromptFormat(t *testing.T) {
+	p := prompt("bob")
+	ts := strings.TrimSuffix(strings.TrimPrefix(p, "["), "][bob]:")
+	if _, err := time.Parse(timeLayout, ts); err != nil {
+		t.Fatalf("bad prompt %q: %v", p, err)
+	}
+}
